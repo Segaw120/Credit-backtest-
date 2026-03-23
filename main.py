@@ -220,7 +220,7 @@ def fetch_cot_data(ticker, start_date, end_date):
     try:
         client = Socrata("data.cftc.gov", None)
         results = client.get(
-            "6dca-aqww",
+            "3ps5-9ddk",
             where=f"market_code='{market_code}'",
             limit=5000
         )
@@ -238,6 +238,8 @@ def fetch_cot_data(ticker, start_date, end_date):
     except Exception as e:
         st.error(f"Error fetching COT data: {e}")
         return pd.DataFrame()
+
+
 
 # --- Indicator Calculation Functions ---
 def calculate_technical_indicators(df):
@@ -404,4 +406,283 @@ def generate_trading_signals(
 
     # Sell: Overbought + Institutional Distribution (High Z-Score) + High Market Health
     if z_col:
-        sell_condition
+        sell_condition = (
+            (df['rsi'] > rsi_overbought) &
+            (df[z_col] > zscore_threshold) &
+            (df['health_gauge'] >= health_threshold)
+        )
+    else:
+        sell_condition = (
+            (df['rsi'] > rsi_overbought) &
+            (df['health_gauge'] >= health_threshold)
+        )
+
+    # Apply Fibonacci and continuation logic
+    for i in range(1, len(df)):
+        if buy_condition.iloc[i]:
+            # Check for Fibonacci retracement
+            if df['market_structure'].iloc[i] == 'bullish':
+                if df['close'].iloc[i] <= df['fib_38.2'].iloc[i]:
+                    df.loc[df.index[i], 'fib_retracement_level'] = '38.2%'
+                    df.loc[df.index[i], 'signal'] = 'BUY'
+            elif df['market_structure'].iloc[i] in ['bearish', 'ranging']:
+                # Check for continuation days
+                if i >= continuation_days:
+                    prev_signals = df['signal'].iloc[i-continuation_days:i]
+                    if not prev_signals.eq('BUY').any():
+                        df.loc[df.index[i], 'continuation_days'] = continuation_days
+                        df.loc[df.index[i], 'signal'] = 'BUY'
+
+        if sell_condition.iloc[i]:
+            # Check for Fibonacci retracement
+            if df['market_structure'].iloc[i] == 'bearish':
+                if df['close'].iloc[i] >= df['fib_61.8'].iloc[i]:
+                    df.loc[df.index[i], 'fib_retracement_level'] = '61.8%'
+                    df.loc[df.index[i], 'signal'] = 'SELL'
+            elif df['market_structure'].iloc[i] in ['bullish', 'ranging']:
+                # Check for continuation days
+                if i >= continuation_days:
+                    prev_signals = df['signal'].iloc[i-continuation_days:i]
+                    if not prev_signals.eq('SELL').any():
+                        df.loc[df.index[i], 'continuation_days'] = continuation_days
+                        df.loc[df.index[i], 'signal'] = 'SELL'
+
+    return df
+
+def backtest_strategy(df, initial_capital=10000):
+    if df.empty:
+        return pd.DataFrame(), 0
+
+    df = df.copy()
+    position = 0
+    cash = initial_capital
+    portfolio_value = [initial_capital]
+    trade_log = []
+
+    for i in range(1, len(df)):
+        if df['signal'].iloc[i] == 'BUY' and position == 0:
+            # Buy at close price
+            shares = cash / df['close'].iloc[i]
+            position = shares
+            cash = 0
+            entry_price = df['close'].iloc[i]
+            trade_log.append({
+                'date': df['date'].iloc[i],
+                'signal': 'BUY',
+                'price': entry_price,
+                'fib_level': df['fib_retracement_level'].iloc[i],
+                'continuation': df['continuation_days'].iloc[i]
+            })
+
+        elif df['signal'].iloc[i] == 'SELL' and position > 0:
+            # Sell at close price
+            cash = position * df['close'].iloc[i]
+            position = 0
+            exit_price = df['close'].iloc[i]
+            trade_log.append({
+                'date': df['date'].iloc[i],
+                'signal': 'SELL',
+                'price': exit_price,
+                'fib_level': df['fib_retracement_level'].iloc[i],
+                'continuation': df['continuation_days'].iloc[i]
+            })
+
+        # Update portfolio value
+        current_value = cash + (position * df['close'].iloc[i])
+        portfolio_value.append(current_value)
+
+    # Calculate returns
+    df['portfolio_value'] = portfolio_value[:-1]  # Align with df length
+    total_return = (portfolio_value[-1] / initial_capital - 1) * 100
+
+    # Calculate performance metrics
+    daily_returns = df['portfolio_value'].pct_change().dropna()
+    sharpe_ratio = np.sqrt(252) * daily_returns.mean() / daily_returns.std()
+    max_drawdown = (df['portfolio_value'].cummax() - df['portfolio_value']).max() / df['portfolio_value'].cummax().max()
+
+    # Win rate and profit factor
+    trades_df = pd.DataFrame(trade_log)
+    if not trades_df.empty and len(trades_df) > 1:
+        buy_trades = trades_df[trades_df['signal'] == 'BUY']
+        sell_trades = trades_df[trades_df['signal'] == 'SELL']
+        if len(buy_trades) == len(sell_trades):
+            trades_df['return'] = sell_trades['price'].values / buy_trades['price'].values - 1
+            winning_trades = trades_df[trades_df['return'] > 0]
+            win_rate = len(winning_trades) / len(trades_df) * 100
+            profit_factor = trades_df['return'][trades_df['return'] > 0].sum() / abs(trades_df['return'][trades_df['return'] < 0].sum())
+        else:
+            win_rate, profit_factor = np.nan, np.nan
+    else:
+        win_rate, profit_factor = np.nan, np.nan
+
+    # Compile metrics
+    metrics = {
+        'Total Return (%)': total_return,
+        'Sharpe Ratio': sharpe_ratio,
+        'Max Drawdown (%)': max_drawdown * 100,
+        'Win Rate (%)': win_rate,
+        'Profit Factor': profit_factor,
+        'Number of Trades': len(trades_df) // 2 if not trades_df.empty else 0
+    }
+
+    return df, metrics
+
+# --- Run Backtest Iterations ---
+def run_backtest_iterations(df, cot_df):
+    iterations = [
+        {
+            'name': 'Iteration 1',
+            'health_threshold': 7.0,
+            'zscore_threshold': 2.0,
+            'rsi_oversold': 30,
+            'rsi_overbought': 70,
+            'fib_retracement': 0.382,
+            'continuation_days': 3
+        },
+        {
+            'name': 'Iteration 2',
+            'health_threshold': 6.0,
+            'zscore_threshold': 1.5,
+            'rsi_oversold': 25,
+            'rsi_overbought': 75,
+            'fib_retracement': 0.382,
+            'continuation_days': 3
+        },
+        {
+            'name': 'Iteration 3',
+            'health_threshold': 5.0,
+            'zscore_threshold': 2.5,
+            'rsi_oversold': 35,
+            'rsi_overbought': 65,
+            'fib_retracement': 0.618,
+            'continuation_days': 5
+        },
+        {
+            'name': 'Iteration 4',
+            'health_threshold': 8.0,
+            'zscore_threshold': 2.0,
+            'rsi_oversold': 30,
+            'rsi_overbought': 70,
+            'fib_retracement': 0.618,
+            'continuation_days': 3
+        },
+        {
+            'name': 'Iteration 5',
+            'health_threshold': 7.0,
+            'zscore_threshold': 1.5,
+            'rsi_oversold': 30,
+            'rsi_overbought': 70,
+            'fib_retracement': 0.382,
+            'continuation_days': 5
+        }
+    ]
+
+    results = []
+
+    for iteration in iterations:
+        st.subheader(iteration['name'])
+
+        # Calculate indicators
+        df_indicators = calculate_technical_indicators(df.copy())
+        if use_cot and not cot_df.empty:
+            df_indicators = calculate_cot_indicators(df_indicators, cot_df.copy())
+        df_indicators = calculate_market_health_gauge(df_indicators)
+        df_indicators = classify_market_structure(df_indicators)
+        df_indicators = calculate_fibonacci_levels(df_indicators)
+
+        # Generate signals
+        df_signals = generate_trading_signals(
+            df_indicators,
+            rsi_oversold=iteration['rsi_oversold'],
+            rsi_overbought=iteration['rsi_overbought'],
+            zscore_threshold=iteration['zscore_threshold'],
+            health_threshold=iteration['health_threshold'],
+            fib_retracement=iteration['fib_retracement'],
+            continuation_days=iteration['continuation_days']
+        )
+
+        # Backtest
+        df_results, metrics = backtest_strategy(df_signals)
+        results.append({
+            'name': iteration['name'],
+            'metrics': metrics,
+            'df': df_results
+        })
+
+        # Display metrics
+        st.write("### Performance Metrics")
+        metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=['Value'])
+        st.dataframe(metrics_df.style.format("{:.2f}"))
+
+        # Plot equity curve
+        st.write("### Equity Curve")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_results['date'],
+            y=df_results['portfolio_value'],
+            name='Portfolio Value'
+        ))
+        fig.update_layout(
+            title=f"Equity Curve - {iteration['name']}",
+            xaxis_title="Date",
+            yaxis_title="Portfolio Value ($)",
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    return results
+
+# --- Main App Logic ---
+def main():
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Run Backtest"):
+        with st.spinner("Fetching data..."):
+            # Fetch OHLCV data
+            ohlcv_df = fetch_ohlcv_data(ticker, start_date, end_date)
+            if ohlcv_df.empty:
+                st.error("Failed to fetch OHLCV data.")
+                return
+
+            # Fetch COT data if enabled and available
+            cot_df = pd.DataFrame()
+            if use_cot and COT_MARKET_MAP.get(ticker):
+                cot_df = fetch_cot_data(ticker, start_date, end_date)
+
+            st.success("Data fetched successfully!")
+
+        with st.spinner("Running backtest iterations..."):
+            results = run_backtest_iterations(ohlcv_df, cot_df)
+
+        # Display comparative results
+        st.header("Comparative Results")
+        comparative_df = pd.DataFrame()
+        for result in results:
+            temp_df = pd.DataFrame.from_dict(result['metrics'], orient='index').T
+            temp_df['Iteration'] = result['name']
+            comparative_df = pd.concat([comparative_df, temp_df], ignore_index=True)
+
+        comparative_df.set_index('Iteration', inplace=True)
+        st.dataframe(comparative_df.style.format("{:.2f}"))
+
+        # Plot comparative metrics
+        st.write("### Comparative Performance")
+        fig = go.Figure()
+        for metric in ['Total Return (%)', 'Sharpe Ratio', 'Max Drawdown (%)', 'Win Rate (%)', 'Profit Factor']:
+            fig.add_trace(go.Bar(
+                x=comparative_df.index,
+                y=comparative_df[metric],
+                name=metric
+            ))
+
+        fig.update_layout(
+            title="Comparative Performance Metrics",
+            xaxis_title="Iteration",
+            yaxis_title="Value",
+            barmode='group',
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+if __name__ == "__main__":
+    main()
+    
