@@ -239,16 +239,17 @@ def fetch_cot_data(ticker, start_date, end_date):
         # Convert to DataFrame
         cot_df = pd.DataFrame.from_records(results)
 
-        # Rename and convert dates
+        # Convert and sort dates using the correct column name
+        cot_df['report_date_as_yyyy_mm_dd'] = pd.to_datetime(cot_df['report_date_as_yyyy_mm_dd'])
+        cot_df = cot_df.sort_values('report_date_as_yyyy_mm_dd')
+
+        # Rename the column to match the rest of your code
         cot_df.rename(columns={'report_date_as_yyyy_mm_dd': 'report_date_as_yyyymmdd'}, inplace=True)
-        cot_df['report_date_as_yyyymmdd'] = pd.to_datetime(cot_df['report_date_as_yyyymmdd'])
-        cot_df = cot_df.sort_values('report_date_as_yyyymmdd')
 
         return cot_df
     except Exception as e:
         st.error(f"Error fetching COT data: {e}")
         return pd.DataFrame()
-
 # --- Indicator Calculation Functions ---
 def calculate_technical_indicators(df):
     if df.empty:
