@@ -220,7 +220,7 @@ def fetch_cot_data(ticker, start_date, end_date):
     try:
         client = Socrata("data.cftc.gov", None)
         results = client.get(
-            "3ps5-9ddk",
+            "6dca-aqww",
             where=f"market_code='{market_code}'",
             limit=5000
         )
