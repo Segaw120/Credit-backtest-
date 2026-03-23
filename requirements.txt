@@ -1,0 +1,16 @@
+
+# Core Requirements
+pandas>=2.0.0
+numpy>=1.24.0
+streamlit>=1.25.0
+yahooquery>=2.2.11
+sodapy>=2.1.0
+TA-Lib>=0.4.26
+matplotlib>=3.7.0
+plotly>=5.15.0
+
+# Optional (for development/debugging)
+black>=23.3.0
+flake8>=6.0.0
+isort>=5.12.0
+jupyterlab>=3.6.0
