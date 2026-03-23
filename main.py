@@ -218,22 +218,23 @@ def fetch_cot_data(ticker, start_date, end_date):
         return pd.DataFrame()
 
     try:
-        # Replace with your actual app token
-        app_token = "YOUR_APP_TOKEN"
-        url = f"https://publicreporting.cftc.gov/api/v3/views/6dca-aqww/rows.json?where=market_code='{market_code}'"
+        # Initialize Socrata client
+        client = Socrata("publicreporting.cftc.gov", None)
 
-        # Add date filtering
-        start_date_str = start_date.strftime("%Y-%m-%d")
-        end_date_str = end_date.strftime("%Y-%m-%d")
-        url += f" AND report_date_as_yyyymmdd>='{start_date_str}' AND report_date_as_yyyymmdd<='{end_date_str}'"
+        # Build WHERE clause
+        where_clause = (
+            f"market_code='{market_code}' AND "
+            f"report_date_as_yyyymmdd>='{start_date.strftime('%Y-%m-%d')}' AND "
+            f"report_date_as_yyyymmdd<='{end_date.strftime('%Y-%m-%d')}'"
+        )
 
-        # Fetch data
-        response = requests.get(url, headers={"X-App-Token": app_token})
-        response.raise_for_status()
-        cot_data = response.json()
+        # Fetch data (limit=5000 to avoid API limits)
+        results = client.get("6dca-aqww", where=where_clause, limit=5000)
 
         # Convert to DataFrame
-        cot_df = pd.DataFrame(cot_data)
+        cot_df = pd.DataFrame.from_records(results)
+
+        # Convert and sort dates
         cot_df['report_date_as_yyyymmdd'] = pd.to_datetime(cot_df['report_date_as_yyyymmdd'])
         cot_df = cot_df.sort_values('report_date_as_yyyymmdd')
 
@@ -241,8 +242,6 @@ def fetch_cot_data(ticker, start_date, end_date):
     except Exception as e:
         st.error(f"Error fetching COT data: {e}")
         return pd.DataFrame()
-
-
 
 # --- Indicator Calculation Functions ---
 def calculate_technical_indicators(df):
