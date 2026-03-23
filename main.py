@@ -179,9 +179,14 @@ use_cot = st.sidebar.checkbox("Use COT Data (if available)", True)
 @st.cache_data
 def fetch_ohlcv_data(ticker, start_date, end_date):
     try:
+        # Use string dates for yahooquery reliability
         data = yq.Ticker(ticker)
-        df = data.history(start=start_date, end=end_date)
+        df = data.history(start=start_date.strftime('%Y-%m-%d'), 
+                          end=end_date.strftime('%Y-%m-%d'))
+        if df.empty:
+            return pd.DataFrame()
         df.reset_index(inplace=True)
+        # Convert to date object for consistent merging
         df['date'] = pd.to_datetime(df['date']).dt.date
         return df
     except Exception as e:
@@ -198,7 +203,7 @@ def fetch_cot_data(ticker, start_date, end_date):
     try:
         client = Socrata("publicreporting.cftc.gov", None)
 
-        # FIX: Appending T00:00:00 to satisfy the floating_timestamp datatype requirement
+        # FIX: Formatted as ISO8601 strings to satisfy the floating_timestamp datatype
         start_str = start_date.strftime('%Y-%m-%dT00:00:00')
         end_str = end_date.strftime('%Y-%m-%dT00:00:00')
 
@@ -219,7 +224,6 @@ def fetch_cot_data(ticker, start_date, end_date):
             )
         )
 
-        # FIX 1: guard against empty results list BEFORE building the DataFrame.
         if not results:
             st.warning(f"No COT records returned for {ticker}.")
             return pd.DataFrame()
@@ -230,21 +234,16 @@ def fetch_cot_data(ticker, start_date, end_date):
             st.warning(f"Empty COT DataFrame for {ticker}.")
             return pd.DataFrame()
 
-        # FIX 2: normalise column names to lowercase
         cot_df.columns = [col.lower() for col in cot_df.columns]
 
         date_col = 'report_date_as_yyyy_mm_dd'
         if date_col not in cot_df.columns:
-            st.warning(
-                f"Expected date column '{date_col}' not found. "
-                f"Available columns: {list(cot_df.columns)}"
-            )
+            st.warning(f"Expected date column '{date_col}' not found.")
             return pd.DataFrame()
 
         cot_df[date_col] = pd.to_datetime(cot_df[date_col])
         cot_df = cot_df.sort_values(date_col)
 
-        # FIX 3: rename ALL position columns
         cot_df.rename(columns={
             date_col:                       'report_date_as_yyyymmdd',
             'comm_positions_long_all':      'commercial_long_all',
@@ -253,7 +252,6 @@ def fetch_cot_data(ticker, start_date, end_date):
             'noncomm_positions_short_all':  'noncommercial_short_all',
         }, inplace=True)
 
-        # Ensure position columns are numeric
         for col in ['commercial_long_all', 'commercial_short_all',
                     'noncommercial_long_all', 'noncommercial_short_all']:
             if col in cot_df.columns:
@@ -264,7 +262,6 @@ def fetch_cot_data(ticker, start_date, end_date):
     except Exception as e:
         st.error(f"Error fetching COT data: {e}")
         return pd.DataFrame()
-            
 
 
 
@@ -289,18 +286,24 @@ def calculate_cot_indicators(df, cot_df, window=52):
     if df.empty or cot_df.empty:
         return df
     df = df.copy()
+    # FIX: Convert to date object to match ohlcv_df for successful merging
     cot_df['date'] = pd.to_datetime(cot_df['report_date_as_yyyymmdd']).dt.date
     df = df.merge(cot_df, on='date', how='left')
+    
+    # FIX: Forward fill weekly COT data across daily OHLCV rows
+    cot_cols = ['commercial_long_all', 'commercial_short_all', 
+                'noncommercial_long_all', 'noncommercial_short_all']
+    df[cot_cols] = df[cot_cols].ffill()
+
     if 'commercial_long_all' in df.columns and 'commercial_short_all' in df.columns:
         df['commercial_net'] = df['commercial_long_all'] - df['commercial_short_all']
-        df['commercial_net_zscore'] = (
-            df['commercial_net'] - df['commercial_net'].rolling(window=window).mean()
-        ) / df['commercial_net'].rolling(window=window).std()
+        roll = df['commercial_net'].rolling(window=window)
+        df['commercial_net_zscore'] = (df['commercial_net'] - roll.mean()) / roll.std()
+        
     if 'noncommercial_long_all' in df.columns and 'noncommercial_short_all' in df.columns:
         df['non_commercial_net'] = df['noncommercial_long_all'] - df['noncommercial_short_all']
-        df['non_commercial_net_zscore'] = (
-            df['non_commercial_net'] - df['non_commercial_net'].rolling(window=window).mean()
-        ) / df['non_commercial_net'].rolling(window=window).std()
+        roll_nc = df['non_commercial_net'].rolling(window=window)
+        df['non_commercial_net_zscore'] = (df['non_commercial_net'] - roll_nc.mean()) / roll_nc.std()
     return df
 
 def calculate_market_health_gauge(df):
@@ -346,8 +349,6 @@ def generate_trading_signals(df, rsi_oversold=30, rsi_overbought=70, zscore_thre
         return df
     df = df.copy()
     df['signal'] = 'HOLD'
-    df['fib_retracement_level'] = None
-    df['continuation_days'] = 0
     z_col = 'commercial_net_zscore' if use_commercial else 'non_commercial_net_zscore'
     if z_col not in df.columns:
         z_col = None
