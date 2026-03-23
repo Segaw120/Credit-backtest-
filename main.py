@@ -496,7 +496,7 @@ def backtest_strategy(df, initial_capital=10000):
     df = df.copy()
     position = 0
     cash = initial_capital
-    portfolio_value = [initial_capital]
+    portfolio_value = [initial_capital] * len(df)
     trade_log = []
 
     for i in range(1, len(df)):
@@ -526,10 +526,10 @@ def backtest_strategy(df, initial_capital=10000):
             })
 
         current_value = cash + (position * df['close'].iloc[i])
-        portfolio_value.append(current_value)
+        portfolio_value[i] = current_value
 
     # Calculate returns
-    df['portfolio_value'] = portfolio_value[:-1]  # Align with df length
+    df['portfolio_value'] = portfolio_value
     total_return = (portfolio_value[-1] / initial_capital - 1) * 100
 
     # Calculate performance metrics
@@ -571,6 +571,7 @@ def backtest_strategy(df, initial_capital=10000):
     }
 
     return df, metrics
+
 
 
 def main():
