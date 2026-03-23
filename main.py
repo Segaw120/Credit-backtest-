@@ -197,7 +197,8 @@ def fetch_cot_data(ticker, start_date, end_date):
 
     try:
         client = Socrata("publicreporting.cftc.gov", None)
-        
+
+        # FIX: Appending T00:00:00 to satisfy the floating_timestamp datatype requirement
         start_str = start_date.strftime('%Y-%m-%dT00:00:00')
         end_str = end_date.strftime('%Y-%m-%dT00:00:00')
 
@@ -208,7 +209,7 @@ def fetch_cot_data(ticker, start_date, end_date):
         )
 
         results = client.get(
-            "72hh-2qvh",
+            "6dca-aqww",
             where=where_clause,
             limit=5000,
             select=(
@@ -218,20 +219,32 @@ def fetch_cot_data(ticker, start_date, end_date):
             )
         )
 
+        # FIX 1: guard against empty results list BEFORE building the DataFrame.
         if not results:
             st.warning(f"No COT records returned for {ticker}.")
             return pd.DataFrame()
 
         cot_df = pd.DataFrame.from_records(results)
+
+        if cot_df.empty:
+            st.warning(f"Empty COT DataFrame for {ticker}.")
+            return pd.DataFrame()
+
+        # FIX 2: normalise column names to lowercase
         cot_df.columns = [col.lower() for col in cot_df.columns]
 
         date_col = 'report_date_as_yyyy_mm_dd'
         if date_col not in cot_df.columns:
+            st.warning(
+                f"Expected date column '{date_col}' not found. "
+                f"Available columns: {list(cot_df.columns)}"
+            )
             return pd.DataFrame()
 
         cot_df[date_col] = pd.to_datetime(cot_df[date_col])
         cot_df = cot_df.sort_values(date_col)
 
+        # FIX 3: rename ALL position columns
         cot_df.rename(columns={
             date_col:                       'report_date_as_yyyymmdd',
             'comm_positions_long_all':      'commercial_long_all',
@@ -240,6 +253,7 @@ def fetch_cot_data(ticker, start_date, end_date):
             'noncomm_positions_short_all':  'noncommercial_short_all',
         }, inplace=True)
 
+        # Ensure position columns are numeric
         for col in ['commercial_long_all', 'commercial_short_all',
                     'noncommercial_long_all', 'noncommercial_short_all']:
             if col in cot_df.columns:
@@ -250,6 +264,7 @@ def fetch_cot_data(ticker, start_date, end_date):
     except Exception as e:
         st.error(f"Error fetching COT data: {e}")
         return pd.DataFrame()
+            
 
 
 
