@@ -221,15 +221,20 @@ def fetch_cot_data(ticker, start_date, end_date):
         # Initialize Socrata client
         client = Socrata("publicreporting.cftc.gov", None)
 
-        # Build WHERE clause
+        # Build WHERE clause using cftc_market_code
         where_clause = (
-            f"market_code='{market_code}' AND "
+            f"cftc_market_code='{market_code}' AND "
             f"report_date_as_yyyymmdd>='{start_date.strftime('%Y-%m-%d')}' AND "
             f"report_date_as_yyyymmdd<='{end_date.strftime('%Y-%m-%d')}'"
         )
 
         # Fetch data (limit=5000 to avoid API limits)
-        results = client.get("6dca-aqww", where=where_clause, limit=5000)
+        results = client.get(
+            "6dca-aqww",
+            where=where_clause,
+            limit=5000,
+            select="report_date_as_yyyymmdd, noncomm_positions_long_all, noncomm_positions_short_all, comm_positions_long_all, comm_positions_short_all"
+        )
 
         # Convert to DataFrame
         cot_df = pd.DataFrame.from_records(results)
