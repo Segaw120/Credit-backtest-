@@ -39,21 +39,21 @@ COT_MARKET_MAP = {
 
     # Currencies
     "EURUSD=X": "096742",  # Euro FX
-    "JPY=X": "097741",     # Japanese Yen
+    "JPY=X":    "097741",  # Japanese Yen
     "GBPUSD=X": "094741",  # British Pound
     "AUDUSD=X": "092741",  # Australian Dollar
     "USDCAD=X": "093741",  # Canadian Dollar
     "USDCHF=X": "095741",  # Swiss Franc
     "NZDUSD=X": "098741",  # New Zealand Dollar
 
-    # Indices (Note: Most indices do not have COT data)
-    "^GSPC": None,  # S&P 500 (no COT)
-    "^DJI": None,   # Dow Jones (no COT)
-    "^IXIC": None,  # NASDAQ (no COT)
-    "^RUT": None,   # Russell 2000 (no COT)
-    "^FTSE": None,  # FTSE 100 (no COT)
-    "^N225": None,  # Nikkei 225 (no COT)
-    "^GDAXI": None  # DAX (no COT)
+    # Indices (no COT data)
+    "^GSPC":  None,
+    "^DJI":   None,
+    "^IXIC":  None,
+    "^RUT":   None,
+    "^FTSE":  None,
+    "^N225":  None,
+    "^GDAXI": None
 }
 
 # --- Asset Tree Structure ---
@@ -181,7 +181,6 @@ ASSET_TREE = {
 # --- Sidebar for User Inputs ---
 st.sidebar.header("Backtest Parameters")
 
-# Asset selection dropdown
 asset_groups = list(ASSET_TREE.keys())
 selected_group = st.sidebar.selectbox("Select Asset Group:", asset_groups)
 selected_asset = st.sidebar.selectbox(
@@ -190,11 +189,9 @@ selected_asset = st.sidebar.selectbox(
 )
 ticker = ASSET_TREE[selected_group][selected_asset]["yahoo_ticker"]
 
-# Date range selection
 start_date = st.sidebar.date_input("Start Date:", datetime(2020, 1, 1))
-end_date = st.sidebar.date_input("End Date:", datetime(2023, 12, 31))
+end_date   = st.sidebar.date_input("End Date:",   datetime(2023, 12, 31))
 
-# COT data toggle (only available for certain assets)
 use_cot = st.sidebar.checkbox("Use COT Data (if available)", True)
 
 # --- Data Fetching Functions ---
@@ -218,38 +215,78 @@ def fetch_cot_data(ticker, start_date, end_date):
         return pd.DataFrame()
 
     try:
-        # Initialize Socrata client
         client = Socrata("publicreporting.cftc.gov", None)
 
-        # Build WHERE clause using cftc_market_code and report_date_as_yyyy_mm_dd
         where_clause = (
             f"cftc_market_code='{market_code}' AND "
             f"report_date_as_yyyy_mm_dd>='{start_date.strftime('%Y-%m-%d')}' AND "
             f"report_date_as_yyyy_mm_dd<='{end_date.strftime('%Y-%m-%d')}'"
         )
 
-        # Fetch data (limit=5000 to avoid API limits)
         results = client.get(
             "6dca-aqww",
             where=where_clause,
             limit=5000,
-            select="report_date_as_yyyy_mm_dd, noncomm_positions_long_all, noncomm_positions_short_all, comm_positions_long_all, comm_positions_short_all"
+            select=(
+                "report_date_as_yyyy_mm_dd, "
+                "noncomm_positions_long_all, noncomm_positions_short_all, "
+                "comm_positions_long_all, comm_positions_short_all"
+            )
         )
 
-        # Convert to DataFrame
+        # FIX 1: guard against empty results list BEFORE building the DataFrame.
+        # pd.DataFrame.from_records([]) creates a column-less frame, so any
+        # column access afterwards raises a KeyError.
+        if not results:
+            st.warning(f"No COT records returned for {ticker}.")
+            return pd.DataFrame()
+
         cot_df = pd.DataFrame.from_records(results)
 
-        # Convert and sort dates using the correct column name
-        cot_df['report_date_as_yyyy_mm_dd'] = pd.to_datetime(cot_df['report_date_as_yyyy_mm_dd'])
-        cot_df = cot_df.sort_values('report_date_as_yyyy_mm_dd')
+        if cot_df.empty:
+            st.warning(f"Empty COT DataFrame for {ticker}.")
+            return pd.DataFrame()
 
-        # Rename the column to match the rest of your code
-        cot_df.rename(columns={'report_date_as_yyyy_mm_dd': 'report_date_as_yyyymmdd'}, inplace=True)
+        # FIX 2: normalise column names to lowercase to handle any API casing
+        # variation that could also cause the KeyError.
+        cot_df.columns = [col.lower() for col in cot_df.columns]
+
+        date_col = 'report_date_as_yyyy_mm_dd'
+        if date_col not in cot_df.columns:
+            st.warning(
+                f"Expected date column '{date_col}' not found. "
+                f"Available columns: {list(cot_df.columns)}"
+            )
+            return pd.DataFrame()
+
+        cot_df[date_col] = pd.to_datetime(cot_df[date_col])
+        cot_df = cot_df.sort_values(date_col)
+
+        # FIX 3: rename ALL position columns so they match the names that
+        # calculate_cot_indicators() checks for.  Previously the fetched names
+        # (comm_positions_long_all / noncomm_positions_long_all) never matched
+        # the expected names (commercial_long_all / noncommercial_long_all),
+        # so COT z-scores were silently never calculated.
+        cot_df.rename(columns={
+            date_col:                       'report_date_as_yyyymmdd',
+            'comm_positions_long_all':      'commercial_long_all',
+            'comm_positions_short_all':     'commercial_short_all',
+            'noncomm_positions_long_all':   'noncommercial_long_all',
+            'noncomm_positions_short_all':  'noncommercial_short_all',
+        }, inplace=True)
+
+        # Ensure position columns are numeric
+        for col in ['commercial_long_all', 'commercial_short_all',
+                    'noncommercial_long_all', 'noncommercial_short_all']:
+            if col in cot_df.columns:
+                cot_df[col] = pd.to_numeric(cot_df[col], errors='coerce')
 
         return cot_df
+
     except Exception as e:
         st.error(f"Error fetching COT data: {e}")
         return pd.DataFrame()
+
 # --- Indicator Calculation Functions ---
 def calculate_technical_indicators(df):
     if df.empty:
@@ -258,8 +295,8 @@ def calculate_technical_indicators(df):
     df = df.copy()
 
     # Trend Indicators
-    df['sma20'] = talib.SMA(df['close'], timeperiod=20)
-    df['sma50'] = talib.SMA(df['close'], timeperiod=50)
+    df['sma20']  = talib.SMA(df['close'], timeperiod=20)
+    df['sma50']  = talib.SMA(df['close'], timeperiod=50)
     df['sma200'] = talib.SMA(df['close'], timeperiod=200)
 
     # Momentum (RSI)
@@ -270,9 +307,7 @@ def calculate_technical_indicators(df):
     df['rvol'] = df['volume'] / df['vol_sma20']
 
     # Volatility (ATR and Bollinger Bands)
-    df['atr'] = talib.ATR(
-        df['high'], df['low'], df['close'], timeperiod=14
-    )
+    df['atr'] = talib.ATR(df['high'], df['low'], df['close'], timeperiod=14)
     df['bb_upper'], df['bb_middle'], df['bb_lower'] = talib.BBANDS(
         df['close'], timeperiod=20, nbdevup=2, nbdevdn=2, matype=0
     )
@@ -305,373 +340,8 @@ def calculate_cot_indicators(df, cot_df, window=52):
 
     return df
 
-def calculate_market_health_gauge(df):
-    if df.empty:
-        return df
 
-    df = df.copy()
 
-    # Initialize health score
-    health = pd.Series(0.0, index=df.index)
-
-    # Trend Component (Max 4 pts)
-    health += np.where(df['close'] > df['sma20'], 1.0, 0)
-    health += np.where(df['close'] > df['sma50'], 1.5, 0)
-    health += np.where(df['close'] > df['sma200'], 1.5, 0)
-
-    # Liquidity Component (Max 3 pts)
-    health += np.where(df['rvol'] > 1.0, 1.5, 0)
-    health += np.where(df['rvol'] > 1.5, 1.5, 0)
-
-    # Volatility/Stability Component (Max 3 pts)
-    bb_width_sma = df['bb_width'].rolling(window=20).mean()
-    health += np.where(df['bb_width'] < bb_width_sma, 3.0, 0)
-
-    df['health_gauge'] = health
-    return df
-
-def classify_market_structure(df):
-    if df.empty:
-        return df
-
-    df = df.copy()
-
-    # Initialize market structure
-    df['market_structure'] = 'ranging'
-
-    # Bullish conditions
-    bullish = (
-        (df['close'] > df['sma200']) &
-        (df['sma50'] > df['sma200']) &
-        (df['atr'] > 1.5 * df['atr'].rolling(20).mean())
-    )
-    df.loc[bullish, 'market_structure'] = 'bullish'
-
-    # Bearish conditions
-    bearish = (
-        (df['close'] < df['sma200']) &
-        (df['sma50'] < df['sma200']) &
-        (df['atr'] > 1.5 * df['atr'].rolling(20).mean())
-    )
-    df.loc[bearish, 'market_structure'] = 'bearish'
-
-    return df
-
-def calculate_fibonacci_levels(df):
-    if df.empty:
-        return df
-
-    df = df.copy()
-
-    # Find swing highs and lows (simplified)
-    df['swing_high'] = df['high'].rolling(50, center=True).max()
-    df['swing_low'] = df['low'].rolling(50, center=True).min()
-
-    # Calculate Fibonacci levels from swing high to low
-    df['fib_23.6'] = df['swing_high'] - 0.236 * (df['swing_high'] - df['swing_low'])
-    df['fib_38.2'] = df['swing_high'] - 0.382 * (df['swing_high'] - df['swing_low'])
-    df['fib_50'] = df['swing_high'] - 0.5 * (df['swing_high'] - df['swing_low'])
-    df['fib_61.8'] = df['swing_high'] - 0.618 * (df['swing_high'] - df['swing_low'])
-
-    return df
-
-# --- Signal Generation and Backtesting ---
-def generate_trading_signals(
-    df,
-    rsi_oversold=30,
-    rsi_overbought=70,
-    zscore_threshold=2.0,
-    health_threshold=7.0,
-    use_commercial=True,
-    fib_retracement=0.382,
-    continuation_days=3
-):
-    if df.empty:
-        return df
-
-    df = df.copy()
-    df['signal'] = 'HOLD'
-    df['fib_retracement_level'] = None
-    df['continuation_days'] = 0
-
-    z_col = 'commercial_net_zscore' if use_commercial else 'non_commercial_net_zscore'
-
-    if z_col not in df.columns:
-        st.warning(f"COT data not available. Using technical indicators only.")
-        z_col = None
-
-    # Buy: Oversold + Institutional Backing (Low Z-Score) + High Market Health
-    if z_col:
-        buy_condition = (
-            (df['rsi'] < rsi_oversold) &
-            (df[z_col] < -zscore_threshold) &
-            (df['health_gauge'] >= health_threshold)
-        )
-    else:
-        buy_condition = (
-            (df['rsi'] < rsi_oversold) &
-            (df['health_gauge'] >= health_threshold)
-        )
-
-    # Sell: Overbought + Institutional Distribution (High Z-Score) + High Market Health
-    if z_col:
-        sell_condition = (
-            (df['rsi'] > rsi_overbought) &
-            (df[z_col] > zscore_threshold) &
-            (df['health_gauge'] >= health_threshold)
-        )
-    else:
-        sell_condition = (
-            (df['rsi'] > rsi_overbought) &
-            (df['health_gauge'] >= health_threshold)
-        )
-
-    # Apply Fibonacci and continuation logic
-    for i in range(1, len(df)):
-        if buy_condition.iloc[i]:
-            # Check for Fibonacci retracement
-            if df['market_structure'].iloc[i] == 'bullish':
-                if df['close'].iloc[i] <= df['fib_38.2'].iloc[i]:
-                    df.loc[df.index[i], 'fib_retracement_level'] = '38.2%'
-                    df.loc[df.index[i], 'signal'] = 'BUY'
-            elif df['market_structure'].iloc[i] in ['bearish', 'ranging']:
-                # Check for continuation days
-                if i >= continuation_days:
-                    prev_signals = df['signal'].iloc[i-continuation_days:i]
-                    if not prev_signals.eq('BUY').any():
-                        df.loc[df.index[i], 'continuation_days'] = continuation_days
-                        df.loc[df.index[i], 'signal'] = 'BUY'
-
-        if sell_condition.iloc[i]:
-            # Check for Fibonacci retracement
-            if df['market_structure'].iloc[i] == 'bearish':
-                if df['close'].iloc[i] >= df['fib_61.8'].iloc[i]:
-                    df.loc[df.index[i], 'fib_retracement_level'] = '61.8%'
-                    df.loc[df.index[i], 'signal'] = 'SELL'
-            elif df['market_structure'].iloc[i] in ['bullish', 'ranging']:
-                # Check for continuation days
-                if i >= continuation_days:
-                    prev_signals = df['signal'].iloc[i-continuation_days:i]
-                    if not prev_signals.eq('SELL').any():
-                        df.loc[df.index[i], 'continuation_days'] = continuation_days
-                        df.loc[df.index[i], 'signal'] = 'SELL'
-
-    return df
-
-def backtest_strategy(df, initial_capital=10000):
-    if df.empty:
-        return pd.DataFrame(), 0
-
-    df = df.copy()
-    position = 0
-    cash = initial_capital
-    portfolio_value = [initial_capital]
-    trade_log = []
-
-    for i in range(1, len(df)):
-        if df['signal'].iloc[i] == 'BUY' and position == 0:
-            # Buy at close price
-            shares = cash / df['close'].iloc[i]
-            position = shares
-            cash = 0
-            entry_price = df['close'].iloc[i]
-            trade_log.append({
-                'date': df['date'].iloc[i],
-                'signal': 'BUY',
-                'price': entry_price,
-                'fib_level': df['fib_retracement_level'].iloc[i],
-                'continuation': df['continuation_days'].iloc[i]
-            })
-
-        elif df['signal'].iloc[i] == 'SELL' and position > 0:
-            # Sell at close price
-            cash = position * df['close'].iloc[i]
-            position = 0
-            exit_price = df['close'].iloc[i]
-            trade_log.append({
-                'date': df['date'].iloc[i],
-                'signal': 'SELL',
-                'price': exit_price,
-                'fib_level': df['fib_retracement_level'].iloc[i],
-                'continuation': df['continuation_days'].iloc[i]
-            })
-
-        # Update portfolio value
-        current_value = cash + (position * df['close'].iloc[i])
-        portfolio_value.append(current_value)
-
-    # Calculate returns
-    df['portfolio_value'] = portfolio_value[:-1]  # Align with df length
-    total_return = (portfolio_value[-1] / initial_capital - 1) * 100
-
-    # Calculate performance metrics
-    daily_returns = df['portfolio_value'].pct_change().dropna()
-    sharpe_ratio = np.sqrt(252) * daily_returns.mean() / daily_returns.std()
-    max_drawdown = (df['portfolio_value'].cummax() - df['portfolio_value']).max() / df['portfolio_value'].cummax().max()
-
-    # Win rate and profit factor
-    trades_df = pd.DataFrame(trade_log)
-    if not trades_df.empty and len(trades_df) > 1:
-        buy_trades = trades_df[trades_df['signal'] == 'BUY']
-        sell_trades = trades_df[trades_df['signal'] == 'SELL']
-        if len(buy_trades) == len(sell_trades):
-            trades_df['return'] = sell_trades['price'].values / buy_trades['price'].values - 1
-            winning_trades = trades_df[trades_df['return'] > 0]
-            win_rate = len(winning_trades) / len(trades_df) * 100
-            profit_factor = trades_df['return'][trades_df['return'] > 0].sum() / abs(trades_df['return'][trades_df['return'] < 0].sum())
-        else:
-            win_rate, profit_factor = np.nan, np.nan
-    else:
-        win_rate, profit_factor = np.nan, np.nan
-
-    # Compile metrics
-    metrics = {
-        'Total Return (%)': total_return,
-        'Sharpe Ratio': sharpe_ratio,
-        'Max Drawdown (%)': max_drawdown * 100,
-        'Win Rate (%)': win_rate,
-        'Profit Factor': profit_factor,
-        'Number of Trades': len(trades_df) // 2 if not trades_df.empty else 0
-    }
-
-    return df, metrics
-
-# --- Run Backtest Iterations ---
-def run_backtest_iterations(df, cot_df):
-    iterations = [
-        {
-            'name': 'Iteration 1',
-            'health_threshold': 7.0,
-            'zscore_threshold': 2.0,
-            'rsi_oversold': 30,
-            'rsi_overbought': 70,
-            'fib_retracement': 0.382,
-            'continuation_days': 3
-        },
-        {
-            'name': 'Iteration 2',
-            'health_threshold': 6.0,
-            'zscore_threshold': 1.5,
-            'rsi_oversold': 25,
-            'rsi_overbought': 75,
-            'fib_retracement': 0.382,
-            'continuation_days': 3
-        },
-        {
-            'name': 'Iteration 3',
-            'health_threshold': 5.0,
-            'zscore_threshold': 2.5,
-            'rsi_oversold': 35,
-            'rsi_overbought': 65,
-            'fib_retracement': 0.618,
-            'continuation_days': 5
-        },
-        {
-            'name': 'Iteration 4',
-            'health_threshold': 8.0,
-            'zscore_threshold': 2.0,
-            'rsi_oversold': 30,
-            'rsi_overbought': 70,
-            'fib_retracement': 0.618,
-            'continuation_days': 3
-        },
-        {
-            'name': 'Iteration 5',
-            'health_threshold': 7.0,
-            'zscore_threshold': 1.5,
-            'rsi_oversold': 30,
-            'rsi_overbought': 70,
-            'fib_retracement': 0.382,
-            'continuation_days': 5
-        }
-    ]
-
-    results = []
-
-    for iteration in iterations:
-        st.subheader(iteration['name'])
-
-        # Calculate indicators
-        df_indicators = calculate_technical_indicators(df.copy())
-        if use_cot and not cot_df.empty:
-            df_indicators = calculate_cot_indicators(df_indicators, cot_df.copy())
-        df_indicators = calculate_market_health_gauge(df_indicators)
-        df_indicators = classify_market_structure(df_indicators)
-        df_indicators = calculate_fibonacci_levels(df_indicators)
-
-        # Generate signals
-        df_signals = generate_trading_signals(
-            df_indicators,
-            rsi_oversold=iteration['rsi_oversold'],
-            rsi_overbought=iteration['rsi_overbought'],
-            zscore_threshold=iteration['zscore_threshold'],
-            health_threshold=iteration['health_threshold'],
-            fib_retracement=iteration['fib_retracement'],
-            continuation_days=iteration['continuation_days']
-        )
-
-        # Backtest
-        df_results, metrics = backtest_strategy(df_signals)
-        results.append({
-            'name': iteration['name'],
-            'metrics': metrics,
-            'df': df_results
-        })
-
-        # Display metrics
-        st.write("### Performance Metrics")
-        metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=['Value'])
-        st.dataframe(metrics_df.style.format("{:.2f}"))
-
-        # Plot equity curve
-        st.write("### Equity Curve")
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_results['date'],
-            y=df_results['portfolio_value'],
-            name='Portfolio Value'
-        ))
-        fig.update_layout(
-            title=f"Equity Curve - {iteration['name']}",
-            xaxis_title="Date",
-            yaxis_title="Portfolio Value ($)",
-            hovermode="x unified"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    return results
-
-# --- Main App Logic ---
-def main():
-    st.sidebar.markdown("---")
-    if st.sidebar.button("Run Backtest"):
-        with st.spinner("Fetching data..."):
-            # Fetch OHLCV data
-            ohlcv_df = fetch_ohlcv_data(ticker, start_date, end_date)
-            if ohlcv_df.empty:
-                st.error("Failed to fetch OHLCV data.")
-                return
-
-            # Fetch COT data if enabled and available
-            cot_df = pd.DataFrame()
-            if use_cot and COT_MARKET_MAP.get(ticker):
-                cot_df = fetch_cot_data(ticker, start_date, end_date)
-
-            st.success("Data fetched successfully!")
-
-        with st.spinner("Running backtest iterations..."):
-            results = run_backtest_iterations(ohlcv_df, cot_df)
-
-        # Display comparative results
-        st.header("Comparative Results")
-        comparative_df = pd.DataFrame()
-        for result in results:
-            temp_df = pd.DataFrame.from_dict(result['metrics'], orient='index').T
-            temp_df['Iteration'] = result['name']
-            comparative_df = pd.concat([comparative_df, temp_df], ignore_index=True)
-
-        comparative_df.set_index('Iteration', inplace=True)
-        st.dataframe(comparative_df.style.format("{:.2f}"))
 
         # Plot comparative metrics
         st.write("### Comparative Performance")
@@ -694,4 +364,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
