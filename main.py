@@ -23,18 +23,181 @@ This app backtests the HealthGauge algorithm using data from Yahoo Finance and S
 It runs 5 iterations with different parameters and displays performance metrics.
 """)
 
-# Sidebar for user inputs
+# --- COT Market Mapping ---
+COT_MARKET_MAP = {
+    # Metals
+    "GC=F": "114131",  # Gold
+    "SI=F": "114133",  # Silver
+    "HG=F": "114132",  # Copper
+    "PL=F": "114134",  # Platinum
+    "PA=F": "114135",  # Palladium
+
+    # Energy
+    "CL=F": "114132",  # WTI Crude Oil
+    "BZ=F": "114136",  # Brent Crude Oil
+    "NG=F": "114137",  # Natural Gas
+
+    # Currencies
+    "EURUSD=X": "096742",  # Euro FX
+    "JPY=X": "097741",     # Japanese Yen
+    "GBPUSD=X": "094741",  # British Pound
+    "AUDUSD=X": "092741",  # Australian Dollar
+    "USDCAD=X": "093741",  # Canadian Dollar
+    "USDCHF=X": "095741",  # Swiss Franc
+    "NZDUSD=X": "098741",  # New Zealand Dollar
+
+    # Indices (Note: Most indices do not have COT data)
+    "^GSPC": None,  # S&P 500 (no COT)
+    "^DJI": None,   # Dow Jones (no COT)
+    "^IXIC": None,  # NASDAQ (no COT)
+    "^RUT": None,   # Russell 2000 (no COT)
+    "^FTSE": None,  # FTSE 100 (no COT)
+    "^N225": None,  # Nikkei 225 (no COT)
+    "^GDAXI": None  # DAX (no COT)
+}
+
+# --- Asset Tree Structure ---
+ASSET_TREE = {
+    "metals": {
+        "GOLD - COMMODITY EXCHANGE INC.": {
+            "name": "Gold",
+            "yahoo_ticker": "GC=F",
+            "asset_group": "Precious Metals"
+        },
+        "SILVER - COMMODITY EXCHANGE INC.": {
+            "name": "Silver",
+            "yahoo_ticker": "SI=F",
+            "asset_group": "Precious Metals"
+        },
+        "COPPER - COMMODITY EXCHANGE INC.": {
+            "name": "Copper",
+            "yahoo_ticker": "HG=F",
+            "asset_group": "Base Metals"
+        },
+        "PLATINUM - NEW YORK MERCANTILE EXCHANGE": {
+            "name": "Platinum",
+            "yahoo_ticker": "PL=F",
+            "asset_group": "Precious Metals"
+        },
+        "PALLADIUM - NEW YORK MERCANTILE EXCHANGE": {
+            "name": "Palladium",
+            "yahoo_ticker": "PA=F",
+            "asset_group": "Precious Metals"
+        }
+    },
+    "energy": {
+        "WTI FINANCIAL CRUDE OIL - NEW YORK MERCANTILE EXCHANGE": {
+            "name": "Crude Oil (WTI)",
+            "yahoo_ticker": "CL=F",
+            "asset_group": "Energy"
+        },
+        "BRENT LAST DAY - NEW YORK MERCANTILE EXCHANGE": {
+            "name": "Brent Crude Oil",
+            "yahoo_ticker": "BZ=F",
+            "asset_group": "Energy"
+        },
+        "E-MINI NATURAL GAS - NEW YORK MERCANTILE EXCHANGE": {
+            "name": "Natural Gas",
+            "yahoo_ticker": "NG=F",
+            "asset_group": "Energy"
+        }
+    },
+    "currencies": {
+        "EURO FX - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "EUR/USD",
+            "yahoo_ticker": "EURUSD=X",
+            "asset_group": "Forex"
+        },
+        "JAPANESE YEN - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "USD/JPY",
+            "yahoo_ticker": "JPY=X",
+            "asset_group": "Forex"
+        },
+        "BRITISH POUND - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "GBP/USD",
+            "yahoo_ticker": "GBPUSD=X",
+            "asset_group": "Forex"
+        },
+        "AUSTRALIAN DOLLAR - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "AUD/USD",
+            "yahoo_ticker": "AUDUSD=X",
+            "asset_group": "Forex"
+        },
+        "CANADIAN DOLLAR - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "USD/CAD",
+            "yahoo_ticker": "USDCAD=X",
+            "asset_group": "Forex"
+        },
+        "SWISS FRANC - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "USD/CHF",
+            "yahoo_ticker": "USDCHF=X",
+            "asset_group": "Forex"
+        },
+        "NZ DOLLAR - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "NZD/USD",
+            "yahoo_ticker": "NZDUSD=X",
+            "asset_group": "Forex"
+        }
+    },
+    "indices": {
+        "E-MINI S&P 500 - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "S&P 500",
+            "yahoo_ticker": "^GSPC",
+            "asset_group": "Equity Indices"
+        },
+        "DOW JONES INDUSTRIAL AVERAGE - CHICAGO BOARD OF TRADE": {
+            "name": "Dow Jones",
+            "yahoo_ticker": "^DJI",
+            "asset_group": "Equity Indices"
+        },
+        "NASDAQ MINI - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "NASDAQ",
+            "yahoo_ticker": "^IXIC",
+            "asset_group": "Equity Indices"
+        },
+        "RUSSELL 2000 STOCK INDEX - ICE FUTURES U.S.": {
+            "name": "Russell 2000",
+            "yahoo_ticker": "^RUT",
+            "asset_group": "Equity Indices"
+        },
+        "FTSE 100 Index": {
+            "name": "FTSE 100",
+            "yahoo_ticker": "^FTSE",
+            "asset_group": "Equity Indices"
+        },
+        "NIKKEI STOCK AVERAGE - CHICAGO MERCANTILE EXCHANGE": {
+            "name": "Nikkei 225",
+            "yahoo_ticker": "^N225",
+            "asset_group": "Equity Indices"
+        },
+        "DAX Performance Index": {
+            "name": "DAX",
+            "yahoo_ticker": "^GDAXI",
+            "asset_group": "Equity Indices"
+        }
+    }
+}
+
+# --- Sidebar for User Inputs ---
 st.sidebar.header("Backtest Parameters")
 
-# User inputs for asset selection and date range
-ticker = st.sidebar.text_input("Enter Ticker Symbol (e.g., SPY, GC=F, EURUSD=X):", "SPY")
+# Asset selection dropdown
+asset_groups = list(ASSET_TREE.keys())
+selected_group = st.sidebar.selectbox("Select Asset Group:", asset_groups)
+selected_asset = st.sidebar.selectbox(
+    "Select Asset:",
+    list(ASSET_TREE[selected_group].keys())
+)
+ticker = ASSET_TREE[selected_group][selected_asset]["yahoo_ticker"]
+
+# Date range selection
 start_date = st.sidebar.date_input("Start Date:", datetime(2020, 1, 1))
 end_date = st.sidebar.date_input("End Date:", datetime(2023, 12, 31))
 
-# COT data toggle (only available for futures/commodities)
-use_cot = st.sidebar.checkbox("Use COT Data (for futures/commodities only)", False)
+# COT data toggle (only available for certain assets)
+use_cot = st.sidebar.checkbox("Use COT Data (if available)", True)
 
-# Function to fetch OHLCV data from Yahoo Finance
+# --- Data Fetching Functions ---
 @st.cache_data
 def fetch_ohlcv_data(ticker, start_date, end_date):
     try:
@@ -47,23 +210,20 @@ def fetch_ohlcv_data(ticker, start_date, end_date):
         st.error(f"Error fetching OHLCV data: {e}")
         return pd.DataFrame()
 
-# Function to fetch COT data from Socrata (CFTC)
 @st.cache_data
 def fetch_cot_data(ticker, start_date, end_date):
+    market_code = COT_MARKET_MAP.get(ticker)
+    if not market_code:
+        st.warning(f"No COT data available for {ticker}.")
+        return pd.DataFrame()
+
     try:
-        # Map ticker to CFTC market code (simplified example)
-        market_map = {
-            "GC=F": "114131",  # Gold Futures
-            "SI=F": "114133",  # Silver Futures
-            "CL=F": "114132",  # Crude Oil Futures
-        }
-
-        if ticker not in market_map:
-            st.warning(f"No COT data available for {ticker}")
-            return pd.DataFrame()
-
         client = Socrata("data.cftc.gov", None)
-        results = client.get("3ps5-9ddk", where=f"market_code='{market_map[ticker]}'")
+        results = client.get(
+            "6dca-aqww",
+            where=f"market_code='{market_code}'",
+            limit=5000
+        )
         cot_df = pd.DataFrame.from_records(results)
 
         # Convert and filter dates
@@ -79,7 +239,7 @@ def fetch_cot_data(ticker, start_date, end_date):
         st.error(f"Error fetching COT data: {e}")
         return pd.DataFrame()
 
-# Function to calculate technical indicators
+# --- Indicator Calculation Functions ---
 def calculate_technical_indicators(df):
     if df.empty:
         return df
@@ -109,7 +269,6 @@ def calculate_technical_indicators(df):
 
     return df
 
-# Function to calculate COT indicators
 def calculate_cot_indicators(df, cot_df, window=52):
     if df.empty or cot_df.empty:
         return df
@@ -135,7 +294,6 @@ def calculate_cot_indicators(df, cot_df, window=52):
 
     return df
 
-# Function to calculate market health gauge
 def calculate_market_health_gauge(df):
     if df.empty:
         return df
@@ -161,7 +319,6 @@ def calculate_market_health_gauge(df):
     df['health_gauge'] = health
     return df
 
-# Function to classify market structure
 def classify_market_structure(df):
     if df.empty:
         return df
@@ -189,7 +346,6 @@ def classify_market_structure(df):
 
     return df
 
-# Function to calculate Fibonacci retracement levels
 def calculate_fibonacci_levels(df):
     if df.empty:
         return df
@@ -208,7 +364,7 @@ def calculate_fibonacci_levels(df):
 
     return df
 
-# Function to generate trading signals
+# --- Signal Generation and Backtesting ---
 def generate_trading_signals(
     df,
     rsi_oversold=30,
@@ -248,284 +404,4 @@ def generate_trading_signals(
 
     # Sell: Overbought + Institutional Distribution (High Z-Score) + High Market Health
     if z_col:
-        sell_condition = (
-            (df['rsi'] > rsi_overbought) &
-            (df[z_col] > zscore_threshold) &
-            (df['health_gauge'] >= health_threshold)
-        )
-    else:
-        sell_condition = (
-            (df['rsi'] > rsi_overbought) &
-            (df['health_gauge'] >= health_threshold)
-        )
-
-    # Apply Fibonacci and continuation logic
-    for i in range(1, len(df)):
-        if buy_condition.iloc[i]:
-            # Check for Fibonacci retracement
-            if df['market_structure'].iloc[i] == 'bullish':
-                if df['close'].iloc[i] <= df['fib_38.2'].iloc[i]:
-                    df.loc[df.index[i], 'fib_retracement_level'] = '38.2%'
-                    df.loc[df.index[i], 'signal'] = 'BUY'
-            elif df['market_structure'].iloc[i] in ['bearish', 'ranging']:
-                # Check for continuation days
-                if i >= continuation_days:
-                    prev_signals = df['signal'].iloc[i-continuation_days:i]
-                    if not prev_signals.eq('BUY').any():
-                        df.loc[df.index[i], 'continuation_days'] = continuation_days
-                        df.loc[df.index[i], 'signal'] = 'BUY'
-
-        if sell_condition.iloc[i]:
-            # Check for Fibonacci retracement
-            if df['market_structure'].iloc[i] == 'bearish':
-                if df['close'].iloc[i] >= df['fib_61.8'].iloc[i]:
-                    df.loc[df.index[i], 'fib_retracement_level'] = '61.8%'
-                    df.loc[df.index[i], 'signal'] = 'SELL'
-            elif df['market_structure'].iloc[i] in ['bullish', 'ranging']:
-                # Check for continuation days
-                if i >= continuation_days:
-                    prev_signals = df['signal'].iloc[i-continuation_days:i]
-                    if not prev_signals.eq('SELL').any():
-                        df.loc[df.index[i], 'continuation_days'] = continuation_days
-                        df.loc[df.index[i], 'signal'] = 'SELL'
-
-    return df
-
-# Function to backtest the strategy
-def backtest_strategy(df, initial_capital=10000):
-    if df.empty:
-        return pd.DataFrame(), 0
-
-    df = df.copy()
-    position = 0
-    cash = initial_capital
-    portfolio_value = [initial_capital]
-    trade_log = []
-
-    for i in range(1, len(df)):
-        if df['signal'].iloc[i] == 'BUY' and position == 0:
-            # Buy at close price
-            shares = cash / df['close'].iloc[i]
-            position = shares
-            cash = 0
-            entry_price = df['close'].iloc[i]
-            trade_log.append({
-                'date': df['date'].iloc[i],
-                'signal': 'BUY',
-                'price': entry_price,
-                'fib_level': df['fib_retracement_level'].iloc[i],
-                'continuation': df['continuation_days'].iloc[i]
-            })
-
-        elif df['signal'].iloc[i] == 'SELL' and position > 0:
-            # Sell at close price
-            cash = position * df['close'].iloc[i]
-            position = 0
-            exit_price = df['close'].iloc[i]
-            trade_log.append({
-                'date': df['date'].iloc[i],
-                'signal': 'SELL',
-                'price': exit_price,
-                'fib_level': df['fib_retracement_level'].iloc[i],
-                'continuation': df['continuation_days'].iloc[i]
-            })
-
-        # Update portfolio value
-        current_value = cash + (position * df['close'].iloc[i])
-        portfolio_value.append(current_value)
-
-    # Calculate returns
-    df['portfolio_value'] = portfolio_value[:-1]  # Align with df length
-    total_return = (portfolio_value[-1] / initial_capital - 1) * 100
-
-    # Calculate performance metrics
-    daily_returns = df['portfolio_value'].pct_change().dropna()
-    sharpe_ratio = np.sqrt(252) * daily_returns.mean() / daily_returns.std()
-    max_drawdown = (df['portfolio_value'].cummax() - df['portfolio_value']).max() / df['portfolio_value'].cummax().max()
-
-    # Win rate and profit factor
-    trades_df = pd.DataFrame(trade_log)
-    if not trades_df.empty and len(trades_df) > 1:
-        buy_trades = trades_df[trades_df['signal'] == 'BUY']
-        sell_trades = trades_df[trades_df['signal'] == 'SELL']
-        if len(buy_trades) == len(sell_trades):
-            trades_df['return'] = sell_trades['price'].values / buy_trades['price'].values - 1
-            winning_trades = trades_df[trades_df['return'] > 0]
-            win_rate = len(winning_trades) / len(trades_df) * 100
-            profit_factor = trades_df['return'][trades_df['return'] > 0].sum() / abs(trades_df['return'][trades_df['return'] < 0].sum())
-        else:
-            win_rate, profit_factor = np.nan, np.nan
-    else:
-        win_rate, profit_factor = np.nan, np.nan
-
-    # Compile metrics
-    metrics = {
-        'Total Return (%)': total_return,
-        'Sharpe Ratio': sharpe_ratio,
-        'Max Drawdown (%)': max_drawdown * 100,
-        'Win Rate (%)': win_rate,
-        'Profit Factor': profit_factor,
-        'Number of Trades': len(trades_df) // 2 if not trades_df.empty else 0
-    }
-
-    return df, metrics
-
-# Function to run all iterations
-def run_backtest_iterations(df, cot_df):
-    iterations = [
-        {
-            'name': 'Iteration 1',
-            'health_threshold': 7.0,
-            'zscore_threshold': 2.0,
-            'rsi_oversold': 30,
-            'rsi_overbought': 70,
-            'fib_retracement': 0.382,
-            'continuation_days': 3
-        },
-        {
-            'name': 'Iteration 2',
-            'health_threshold': 6.0,
-            'zscore_threshold': 1.5,
-            'rsi_oversold': 25,
-            'rsi_overbought': 75,
-            'fib_retracement': 0.382,
-            'continuation_days': 3
-        },
-        {
-            'name': 'Iteration 3',
-            'health_threshold': 5.0,
-            'zscore_threshold': 2.5,
-            'rsi_oversold': 35,
-            'rsi_overbought': 65,
-            'fib_retracement': 0.618,
-            'continuation_days': 5
-        },
-        {
-            'name': 'Iteration 4',
-            'health_threshold': 8.0,
-            'zscore_threshold': 2.0,
-            'rsi_oversold': 30,
-            'rsi_overbought': 70,
-            'fib_retracement': 0.618,
-            'continuation_days': 3
-        },
-        {
-            'name': 'Iteration 5',
-            'health_threshold': 7.0,
-            'zscore_threshold': 1.5,
-            'rsi_oversold': 30,
-            'rsi_overbought': 70,
-            'fib_retracement': 0.382,
-            'continuation_days': 5
-        }
-    ]
-
-    results = []
-
-    for iteration in iterations:
-        st.subheader(iteration['name'])
-
-        # Calculate indicators
-        df_indicators = calculate_technical_indicators(df.copy())
-        if use_cot and not cot_df.empty:
-            df_indicators = calculate_cot_indicators(df_indicators, cot_df.copy())
-        df_indicators = calculate_market_health_gauge(df_indicators)
-        df_indicators = classify_market_structure(df_indicators)
-        df_indicators = calculate_fibonacci_levels(df_indicators)
-
-        # Generate signals
-        df_signals = generate_trading_signals(
-            df_indicators,
-            rsi_oversold=iteration['rsi_oversold'],
-            rsi_overbought=iteration['rsi_overbought'],
-            zscore_threshold=iteration['zscore_threshold'],
-            health_threshold=iteration['health_threshold'],
-            fib_retracement=iteration['fib_retracement'],
-            continuation_days=iteration['continuation_days']
-        )
-
-        # Backtest
-        df_results, metrics = backtest_strategy(df_signals)
-        results.append({
-            'name': iteration['name'],
-            'metrics': metrics,
-            'df': df_results
-        })
-
-        # Display metrics
-        st.write("### Performance Metrics")
-        metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=['Value'])
-        st.dataframe(metrics_df.style.format("{:.2f}"))
-
-        # Plot equity curve
-        st.write("### Equity Curve")
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_results['date'],
-            y=df_results['portfolio_value'],
-            name='Portfolio Value'
-        ))
-        fig.update_layout(
-            title=f"Equity Curve - {iteration['name']}",
-            xaxis_title="Date",
-            yaxis_title="Portfolio Value ($)",
-            hovermode="x unified"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    return results
-
-# Main app logic
-def main():
-    st.sidebar.markdown("---")
-    if st.sidebar.button("Run Backtest"):
-        with st.spinner("Fetching data..."):
-            # Fetch OHLCV data
-            ohlcv_df = fetch_ohlcv_data(ticker, start_date, end_date)
-            if ohlcv_df.empty:
-                st.error("Failed to fetch OHLCV data.")
-                return
-
-            # Fetch COT data if enabled
-            cot_df = pd.DataFrame()
-            if use_cot:
-                cot_df = fetch_cot_data(ticker, start_date, end_date)
-
-            st.success("Data fetched successfully!")
-
-        with st.spinner("Running backtest iterations..."):
-            results = run_backtest_iterations(ohlcv_df, cot_df)
-
-        # Display comparative results
-        st.header("Comparative Results")
-        comparative_df = pd.DataFrame()
-        for result in results:
-            temp_df = pd.DataFrame.from_dict(result['metrics'], orient='index').T
-            temp_df['Iteration'] = result['name']
-            comparative_df = pd.concat([comparative_df, temp_df], ignore_index=True)
-
-        comparative_df.set_index('Iteration', inplace=True)
-        st.dataframe(comparative_df.style.format("{:.2f}"))
-
-        # Plot comparative metrics
-        st.write("### Comparative Performance")
-        fig = go.Figure()
-        for metric in ['Total Return (%)', 'Sharpe Ratio', 'Max Drawdown (%)', 'Win Rate (%)', 'Profit Factor']:
-            fig.add_trace(go.Bar(
-                x=comparative_df.index,
-                y=comparative_df[metric],
-                name=metric
-            ))
-
-        fig.update_layout(
-            title="Comparative Performance Metrics",
-            xaxis_title="Iteration",
-            yaxis_title="Value",
-            barmode='group',
-            hovermode="x unified"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-if __name__ == "__main__":
-    main()
-  
+        sell_condition
